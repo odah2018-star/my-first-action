@@ -4,23 +4,34 @@ on:
   push:
     branches: [ "main" ]
   workflow_dispatch:
+  schedule:
+    - cron: '*/10 * * * *'
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
+    - name: Restore cached database
+      id: cache-db-restore
+      uses: actions/cache/restore@v4
+      with:
+        path: bot_data.db
+        key: my-telegram-bot-database
+        restore-keys: |
+          my-telegram-bot-database
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-    
+
     - name: Install dependencies
       run: |
         pip install python-telegram-bot python-dotenv apscheduler
-    
+
     - name: Run bot
       env:
         BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
@@ -29,3 +40,10 @@ jobs:
         AUTO_SEND_INTERVAL: ${{ secrets.AUTO_SEND_INTERVAL }}
       run: |
         python main.py
+
+    - name: Save database to cache
+      uses: actions/cache/save@v4
+      if: always()
+      with:
+        path: bot_data.db
+        key: my-telegram-bot-database
