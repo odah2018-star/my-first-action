@@ -1,0 +1,31 @@
+name: Run Telegram Bot
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install python-telegram-bot python-dotenv apscheduler
+    
+    - name: Run bot
+      env:
+        BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        CHANNEL_LINK: ${{ secrets.CHANNEL_LINK }}
+        ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
+        AUTO_SEND_INTERVAL: ${{ secrets.AUTO_SEND_INTERVAL }}
+      run: |
+        python main.py
