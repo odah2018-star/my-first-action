@@ -31,7 +31,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 # ==================== تحميل الإعدادات ====================
-# الآن سيعمل هذا الجزء دون أخطاء
 possible_paths = [
     '/home/1fu300/.env',
     '/home/motaz2026/telegram-bot/.env',
@@ -67,13 +66,16 @@ if admin_ids_str:
 AUTO_SEND_INTERVAL = int(os.getenv("AUTO_SEND_INTERVAL", "5"))
 DB_PATH = os.path.join(os.path.dirname(__file__), "bot_data.db")
 
-# ==================== التحقق من التوكن ====================
+# معرف القناة المرتبطة (ضع معرف قناتك هنا)
+LINKED_CHANNEL_ID = -1002882265751
+
 if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
     raise ValueError("❌ لم يتم تعيين BOT_TOKEN بشكل صحيح في ملف .env!")
 
 print(f"✅ تم تحميل التوكن: {BOT_TOKEN[:10]}...")
 print(f"👑 عدد المشرفين: {len(ADMIN_IDS)}")
 print(f"📢 قناة الاشتراك: {CHANNEL_LINK or 'غير مفعلة'}")
+print(f"🔗 معرف القناة المرتبطة: {LINKED_CHANNEL_ID}")
 
 # ==================== التخزين المؤقت ====================
 _replies_cache: Dict[str, str] = {}
@@ -99,8 +101,6 @@ def init_db():
     global _replies_cache
     with get_db() as conn:
         cur = conn.cursor()
-
-        # جدول الردود التلقائية
         cur.execute("""
             CREATE TABLE IF NOT EXISTS auto_replies (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,8 +109,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-
-        # جدول الرسائل المجدولة
         cur.execute("""
             CREATE TABLE IF NOT EXISTS scheduled_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,8 +119,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-
-        # جدول المجموعات
         cur.execute("""
             CREATE TABLE IF NOT EXISTS bot_groups (
                 chat_id INTEGER PRIMARY KEY,
@@ -131,8 +127,6 @@ def init_db():
                 added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-
-        # جدول المخالفين
         cur.execute("""
             CREATE TABLE IF NOT EXISTS violators_db (
                 user_id INTEGER PRIMARY KEY,
@@ -140,15 +134,11 @@ def init_db():
                 last_violation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-
-        # جدول المشرفين
         cur.execute("""
             CREATE TABLE IF NOT EXISTS admins (
                 user_id INTEGER PRIMARY KEY
             )
         """)
-
-        # جدول الأزرار المخصصة
         cur.execute("""
             CREATE TABLE IF NOT EXISTS custom_buttons (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,8 +148,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-
-        # جدول القوائم المضمنة
         cur.execute("""
             CREATE TABLE IF NOT EXISTS button_posts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -169,13 +157,10 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-
         conn.commit()
-
         for admin_id in ADMIN_IDS:
             cur.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (admin_id,))
         conn.commit()
-
     refresh_caches()
     add_default_replies()
     print("✅ تم تهيئة قاعدة البيانات بنجاح")
@@ -208,7 +193,6 @@ def add_default_replies():
             cur = conn.cursor()
             cur.execute("SELECT COUNT(*) FROM auto_replies")
             count = cur.fetchone()[0]
-
             if count == 0:
                 for keyword, response in default_replies:
                     cur.execute("INSERT OR IGNORE INTO auto_replies (keyword, response) VALUES (?, ?)", (keyword, response))
@@ -294,32 +278,35 @@ async def is_admin(user_id: int) -> bool:
     except:
         return False
 
-# ==================== دوال المساعدة (المعدلة بالكامل) ====================
-
+# ==================== دالة التحقق من الاشتراك (المعدلة بالكامل) ====================
 async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """التحقق من الاشتراك - مع استثناء القنوات تماماً"""
     
     # 1. استثناء القنوات: إذا كان الطلب قادم من قناة، اسمح بالمرور فوراً
-    if context.chat_data is not None and context.effective_chat and context.effective_chat.type == "channel":
-        logger.info("✅ استثناء: رسالة من قناة (effective_chat.type == channel)")
+    if context.effective_chat and context.effective_chat.type == "channel":
+        logger.info("✅ [check] استثناء: effective_chat.type == channel")
+        return True
+    
+    # 2. استثناء معرف القناة المرتبطة مباشرة
+    if user_id == LINKED_CHANNEL_ID:
+        logger.info(f"✅ [check] استثناء: معرف القناة المرتبطة {user_id}")
         return True
 
     if not CHANNEL_LINK:
         return True
 
-    # استثناء الحسابات التقنية (مثل البوت نفسه) أو المعرفات السالبة
+    # استثناء المعرفات السالبة
     if user_id < 0:
-        logger.info(f"✅ استثناء: معرف سالب {user_id}")
+        logger.info(f"✅ [check] استثناء: معرف سالب {user_id}")
         return True
 
     bot_user = await context.bot.get_me()
     if user_id == bot_user.id:
-        logger.info(f"✅ استثناء: البوت نفسه {user_id}")
+        logger.info(f"✅ [check] استثناء: البوت نفسه {user_id}")
         return True
 
-    # استثناء المشرفين
     if await is_admin(user_id):
-        logger.info(f"✅ استثناء: مشرف {user_id}")
+        logger.info(f"✅ [check] استثناء: مشرف {user_id}")
         return True
 
     try:
@@ -338,6 +325,10 @@ async def delete_after_delay(message, delay: int):
         logger.error(f"خطأ في حذف الرسالة: {e}")
 
 async def send_subscription_warning(update: Update, context: ContextTypes.DEFAULT_TYPE, user, warning_count: int):
+    bot_user = await context.bot.get_me()
+    if user.id == bot_user.id:
+        return
+    
     if warning_count == 1:
         delete_time = 60
     elif warning_count == 2:
@@ -361,28 +352,53 @@ async def send_subscription_warning(update: Update, context: ContextTypes.DEFAUL
         reply_markup=keyboard,
         parse_mode=ParseMode.MARKDOWN
     )
-
     asyncio.create_task(delete_after_delay(update.message, delete_time))
 
-# ==================== معالجة الرسائل الرئيسية (المعدلة بالكامل) ====================
-
+# ==================== معالجة الرسائل الرئيسية (المعدلة بالكامل - النهائية) ====================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالجة الرسائل والردود مع استثناء القنوات"""
 
     try:
-        # 🔥 استثناء 1: رسائل القنوات المباشرة
+        # ========== كود تشخيصي (يمكنك إزالته بعد التأكد من العمل) ==========
+        logger.info("=" * 50)
+        logger.info("📨 رسالة جديدة:")
+        if update.message:
+            logger.info(f"  message.chat.id: {update.message.chat.id}")
+            logger.info(f"  message.chat.type: {update.message.chat.type}")
+            if update.message.sender_chat:
+                logger.info(f"  message.sender_chat.id: {update.message.sender_chat.id}")
+                logger.info(f"  message.sender_chat.type: {update.message.sender_chat.type}")
+        if update.effective_chat:
+            logger.info(f"  effective_chat.id: {update.effective_chat.id}")
+            logger.info(f"  effective_chat.type: {update.effective_chat.type}")
+        if update.effective_user:
+            logger.info(f"  effective_user.id: {update.effective_user.id}")
+        logger.info("=" * 50)
+        # ========== نهاية الكود التشخيصي ==========
+        
+        # 🔥 الاستثناء 1: رسائل القنوات المباشرة
         if update.channel_post:
-            logger.info("✅ استثناء: channel_post")
+            logger.info("✅ [1] استثناء: channel_post")
             return
         
-        # 🔥 استثناء 2: القنوات عبر sender_chat (مهم للقناة المرتبطة)
+        # 🔥 الاستثناء 2: الرسائل القادمة من قنوات (sender_chat)
         if update.message and update.message.sender_chat:
-            logger.info(f"✅ استثناء: sender_chat {update.message.sender_chat.id}")
+            logger.info(f"✅ [2] استثناء: sender_chat {update.message.sender_chat.id}")
             return
         
-        # 🔥 استثناء 3: إذا كانت المحادثة من نوع قناة
+        # 🔥 الاستثناء 3: إذا كان نوع الدردشة قناة
         if update.effective_chat and update.effective_chat.type == "channel":
-            logger.info(f"✅ استثناء: effective_chat.type == channel")
+            logger.info("✅ [3] استثناء: effective_chat.type == channel")
+            return
+        
+        # 🔥 الاستثناء 4: إذا كان المعرف هو معرف القناة المرتبطة
+        if update.effective_chat and update.effective_chat.id == LINKED_CHANNEL_ID:
+            logger.info(f"✅ [4] استثناء: المعرف المباشر {LINKED_CHANNEL_ID}")
+            return
+        
+        # 🔥 الاستثناء 5: إذا كان المستخدم هو القناة المرتبطة
+        if update.effective_user and update.effective_user.id == LINKED_CHANNEL_ID:
+            logger.info(f"✅ [5] استثناء: المستخدم هو القناة {LINKED_CHANNEL_ID}")
             return
 
         # التأكد من وجود رسالة نصية ومستخدم فعال
@@ -391,10 +407,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.effective_user:
             return
 
-        # ميزة تجاهل الرسائل القديمة
+        # تجاهل الرسائل القديمة
         now = datetime.now().timestamp()
         msg_time = update.message.date.timestamp()
-        if msg_time < now - 5:
+        if msg_time < now - 10:
             return
 
         # استثناء البوت نفسه
@@ -402,29 +418,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user.id == bot_user.id:
             return
 
-        # استثناء المعرفات السالبة (قنوات/مجموعات)
+        # استثناء المعرفات السالبة
         if update.effective_user.id < 0:
-            logger.info(f"✅ استثناء: معرف سالب {update.effective_user.id}")
+            logger.info(f"✅ [6] استثناء: معرف سالب {update.effective_user.id}")
             return
 
         message_text = update.message.text.strip()
         if message_text.startswith('/'):
             return
 
-        # تسجيل المجموعات فقط (وليس القنوات أو الخاص)
-        chat_id = update.effective_chat.id
+        # معالجة المجموعات فقط
         if update.effective_chat.type in ["group", "supergroup"]:
             try:
                 with get_db() as conn:
                     conn.execute(
                         "INSERT OR IGNORE INTO bot_groups (chat_id, chat_title) VALUES (?, ?)",
-                        (chat_id, update.effective_chat.title or "بدون عنوان")
+                        (update.effective_chat.id, update.effective_chat.title or "بدون عنوان")
                     )
                     conn.commit()
             except Exception as e:
                 logger.error(f"خطأ في تسجيل المجموعة: {e}")
 
-            # نظام الاشتراك الإجباري للمجموعات فقط
+            # نظام الاشتراك الإجباري
             user = update.effective_user
             if not await check_subscription(user.id, context):
                 try:
@@ -436,7 +451,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         cur.execute("SELECT warnings FROM violators_db WHERE user_id = ?", (user.id,))
                         row = cur.fetchone()
                         warning_count = row[0] if row else 1
-
                     await send_subscription_warning(update, context, user, warning_count)
                     return
                 except Exception as e:
@@ -449,8 +463,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         for keyword, response in _replies_cache.items():
             if normalize_text(keyword) in norm_text:
-                await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
-                return
+                try:
+                    await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
+                    return
+                except:
+                    try:
+                        await update.message.reply_text(response)
+                        return
+                    except:
+                        pass
 
     except Exception as e:
         logger.error(f"خطأ عام في handle_message: {e}")
@@ -459,8 +480,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.new_chat_members:
         return
-
     if update.channel_post:
+        return
+    if update.effective_chat.type == "channel":
         return
 
     chat_title = update.effective_chat.title or "المجموعة"
@@ -582,14 +604,11 @@ async def delschedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cur = conn.cursor()
             cur.execute("SELECT message_text FROM scheduled_messages WHERE id = ?", (msg_id,))
             msg = cur.fetchone()
-
             if not msg:
                 return await update.message.reply_text(f"❌ لا توجد رسالة رقم `{msg_id}`", parse_mode=ParseMode.MARKDOWN)
-
             cur.execute("DELETE FROM scheduled_messages WHERE id = ?", (msg_id,))
             conn.commit()
-
-            await update.message.reply_text(f"✅ تم حذف الرسالة رقم `{msg_id}`", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"✅ تم حذف الرسالة رقم `{msg_id}`", parse_mode=ParseMode.MARKDOWN)
     except ValueError:
         await update.message.reply_text("❌ يجب إدخال رقم صحيح")
 
@@ -777,10 +796,8 @@ async def del_reply_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cur = conn.cursor()
         cur.execute("SELECT response FROM auto_replies WHERE keyword = ?", (keyword,))
         result = cur.fetchone()
-
         if not result:
             return await update.message.reply_text(f"❌ لا يوجد رد للكلمة `{keyword}`", parse_mode=ParseMode.MARKDOWN)
-
         cur.execute("DELETE FROM auto_replies WHERE keyword = ?", (keyword,))
         conn.commit()
 
@@ -790,7 +807,6 @@ async def del_reply_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def replies_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _replies_cache:
         refresh_caches()
-
     if not _replies_cache:
         return await update.message.reply_text("📭 لا توجد ردود حالياً.\nاستخدم `/addreply` لإضافة رد.")
 
@@ -864,15 +880,13 @@ async def run_bot():
     print("🚀 جاري تشغيل البوت...")
     print(f"👑 المشرفون: {ADMIN_IDS}")
     print(f"📢 قناة الاشتراك: {CHANNEL_LINK or 'غير مفعلة'}")
+    print(f"🔗 معرف القناة المرتبطة: {LINKED_CHANNEL_ID}")
     print("=" * 50 + "\n")
 
-    # تهيئة قاعدة البيانات
     init_db()
 
-    # إنشاء التطبيق
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # إضافة المعالجات
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("addreply", add_reply_cmd))
@@ -891,7 +905,6 @@ async def run_bot():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(error_handler)
 
-    # المهام المجدولة
     scheduler = AsyncIOScheduler()
     scheduler.add_job(send_scheduled_messages, IntervalTrigger(minutes=AUTO_SEND_INTERVAL), args=[app])
     scheduler.start()
@@ -899,11 +912,8 @@ async def run_bot():
     print(f"⏰ تم تفعيل نظام الرسائل المجدولة (فحص كل {AUTO_SEND_INTERVAL} دقيقة)")
     print("✅ البوت يعمل الآن! في انتظار الرسائل...\n")
 
-    # بدء البوت - مع تجاهل الرسائل المعلقة (الميزة الجديدة)
     await app.initialize()
     await app.start()
-
-    # 🔥 الميزة المطلوبة: تجاهل جميع الرسائل التي أرسلت أثناء توقف البوت
     await app.updater.start_polling(drop_pending_updates=True)
 
     try:
