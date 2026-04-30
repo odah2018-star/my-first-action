@@ -270,11 +270,90 @@ async def is_admin(user_id: int) -> bool:
     except:
         return False
 
-async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    if not CHANNEL_LINK:
-        return True
-    if user_id < 0:
-        return True
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        # ========== الاستثناءات الشاملة للقنوات ==========
+        
+        # استثناء 1: رسائل القنوات المباشرة
+        if update.channel_post:
+            logger.info("✅ استثناء: channel_post")
+            return
+        
+        # استثناء 2: البوت نفسه
+        if update.effective_user:
+            bot_user = await context.bot.get_me()
+            if update.effective_user.id == bot_user.id:
+                logger.info("✅ استثناء: البوت نفسه")
+                return
+        
+        # استثناء 3: أي قناة (معرف سالب)
+        if update.effective_chat and update.effective_chat.id < 0:
+            logger.info(f"✅ استثناء قناة: {update.effective_chat.id}")
+            return
+        
+        # استثناء 4: إذا كانت الرسالة من قناة عبر sender_chat
+        if update.message and update.message.sender_chat:
+            logger.info(f"✅ استثناء: sender_chat {update.message.sender_chat.id}")
+            return
+        
+        # استثناء 5: التأكد من وجود مستخدم عادي (معرف موجب)
+        if not update.effective_user or update.effective_user.id < 0:
+            logger.info("✅ استثناء: ليس مستخدم عادي")
+            return
+        
+        # باقي المعالجة للمستخدمين العاديين فقط...
+        if not update.message or not update.message.text:
+            return
+        
+        message_text = update.message.text.strip()
+        
+        if message_text.startswith('/'):
+            return
+        
+        user = update.effective_user
+        
+        # تطبيق الاشتراك الإجباري فقط على المستخدمين العاديين
+        if user.id > 0 and update.effective_chat.type != "private":
+            if not await check_subscription(user.id, context):
+                try:
+                    with get_db() as conn:
+                        cur = conn.cursor()
+                        cur.execute("INSERT OR IGNORE INTO violators_db (user_id, warnings) VALUES (?, 0)", (user.id,))
+                        cur.execute("UPDATE violators_db SET warnings = warnings + 1 WHERE user_id = ?", (user.id,))
+                        conn.commit()
+                        cur.execute("SELECT warnings FROM violators_db WHERE user_id = ?", (user.id,))
+                        row = cur.fetchone()
+                        warning_count = row[0] if row else 1
+                    await send_subscription_warning(update, context, user, warning_count)
+                    return
+                except Exception as e:
+                    logger.error(f"خطأ في نظام الاشتراك: {e}")
+            else:
+                try:
+                    with get_db() as conn:
+                        conn.execute("DELETE FROM violators_db WHERE user_id = ?", (user.id,))
+                        conn.commit()
+                except:
+                    pass
+        
+        # ========== الردود التلقائية ==========
+        norm_text = normalize_text(message_text)
+        if len(_replies_cache) == 0:
+            refresh_caches()
+        for keyword, response in _replies_cache.items():
+            if normalize_text(keyword) in norm_text:
+                try:
+                    await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
+                    return
+                except:
+                    try:
+                        await update.message.reply_text(response)
+                        return
+                    except:
+                        pass
+    except Exception as e:
+        logger.error(f"خطأ عام في handle_message: {e}")
+        
     bot_user = await context.bot.get_me()
     if user_id == bot_user.id:
         return True
