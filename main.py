@@ -270,95 +270,25 @@ async def is_admin(user_id: int) -> bool:
     except:
         return False
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        # ========== الاستثناءات الشاملة للقنوات ==========
-        
-        # استثناء 1: رسائل القنوات المباشرة
-        if update.channel_post:
-            logger.info("✅ استثناء: channel_post")
-            return
-        
-        # استثناء 2: البوت نفسه
-        if update.effective_user:
-            bot_user = await context.bot.get_me()
-            if update.effective_user.id == bot_user.id:
-                logger.info("✅ استثناء: البوت نفسه")
-                return
-        
-        # استثناء 3: أي قناة (معرف سالب)
-        if update.effective_chat and update.effective_chat.id < 0:
-            logger.info(f"✅ استثناء قناة: {update.effective_chat.id}")
-            return
-        
-        # استثناء 4: إذا كانت الرسالة من قناة عبر sender_chat
-        if update.message and update.message.sender_chat:
-            logger.info(f"✅ استثناء: sender_chat {update.message.sender_chat.id}")
-            return
-        
-        # استثناء 5: التأكد من وجود مستخدم عادي (معرف موجب)
-        if not update.effective_user or update.effective_user.id < 0:
-            logger.info("✅ استثناء: ليس مستخدم عادي")
-            return
-        
-        # باقي المعالجة للمستخدمين العاديين فقط...
-        if not update.message or not update.message.text:
-            return
-        
-        message_text = update.message.text.strip()
-        
-        if message_text.startswith('/'):
-            return
-        
-        user = update.effective_user
-        
-        # تطبيق الاشتراك الإجباري فقط على المستخدمين العاديين
-        if user.id > 0 and update.effective_chat.type != "private":
-            if not await check_subscription(user.id, context):
-                try:
-                    with get_db() as conn:
-                        cur = conn.cursor()
-                        cur.execute("INSERT OR IGNORE INTO violators_db (user_id, warnings) VALUES (?, 0)", (user.id,))
-                        cur.execute("UPDATE violators_db SET warnings = warnings + 1 WHERE user_id = ?", (user.id,))
-                        conn.commit()
-                        cur.execute("SELECT warnings FROM violators_db WHERE user_id = ?", (user.id,))
-                        row = cur.fetchone()
-                        warning_count = row[0] if row else 1
-                    await send_subscription_warning(update, context, user, warning_count)
-                    return
-                except Exception as e:
-                    logger.error(f"خطأ في نظام الاشتراك: {e}")
-            else:
-                try:
-                    with get_db() as conn:
-                        conn.execute("DELETE FROM violators_db WHERE user_id = ?", (user.id,))
-                        conn.commit()
-                except:
-                    pass
-        
-        # ========== الردود التلقائية ==========
-        norm_text = normalize_text(message_text)
-        if len(_replies_cache) == 0:
-            refresh_caches()
-        for keyword, response in _replies_cache.items():
-            if normalize_text(keyword) in norm_text:
-                try:
-                    await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
-                    return
-                except:
-                    try:
-                        await update.message.reply_text(response)
-                        return
-                    except:
-                        pass
-    except Exception as e:
-        logger.error(f"خطأ عام في handle_message: {e}")
-        
+async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    # 🔥 إذا لم توجد قناة، لا تطلب اشتراكاً
+    if not CHANNEL_LINK:
+        return True
+    
+    # 🔥 استثناء جميع القنوات والمجموعات (أي معرف سالب)
+    if user_id < 0:
+        logger.info(f"✅ تم استثناء قناة/مجموعة معرفها: {user_id}")
+        return True
+    
+    # 🔥 استثناء البوت نفسه
     bot_user = await context.bot.get_me()
     if user_id == bot_user.id:
         return True
+    
+    # 🔥 استثناء المشرفين
     if await is_admin(user_id):
         return True
+    
     try:
         channel = CHANNEL_LINK.replace('@', '').replace('https://t.me/', '').strip()
         member = await context.bot.get_chat_member(chat_id=f"@{channel}", user_id=user_id)
@@ -404,36 +334,82 @@ async def send_subscription_warning(update: Update, context: ContextTypes.DEFAUL
     )
     asyncio.create_task(delete_after_delay(update.message, delete_time))
 
-# ==================== معالجة الرسائل الرئيسية (المعدلة نهائياً) ====================
+# ==================== معالجة الرسائل الرئيسية (النسخة النهائية - تستثني القناة المرتبطة بكل الطرق) ====================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        # استثناء رسائل القنوات
+        # ========== معرف القناة المرتبطة ==========
+        LINKED_CHANNEL_ID = -1002882265751  # ضع معرف قناتك هنا
+        
+        # ========== الاستثناءات الشاملة ==========
+        
+        # استثناء 1: رسائل القنوات المباشرة (channel_post)
         if update.channel_post:
+            logger.info("✅ [1] استثناء: channel_post")
             return
         
-        # استثناء البوت نفسه
+        # استثناء 2: البوت نفسه
         if update.effective_user:
             bot_user = await context.bot.get_me()
             if update.effective_user.id == bot_user.id:
+                logger.info("✅ [2] استثناء: البوت نفسه")
                 return
-
+        
+        # استثناء 3: القناة المرتبطة عبر sender_chat (الأهم)
+        if update.message and update.message.sender_chat:
+            sender_id = update.message.sender_chat.id
+            logger.info(f"📢 sender_chat detected: {sender_id}")
+            if sender_id == LINKED_CHANNEL_ID or sender_id < 0:
+                logger.info(f"✅ [3] استثناء: رسالة من قناة (sender_chat) {sender_id}")
+                return
+        
+        # استثناء 4: أي قناة (معرف سالب)
+        if update.effective_chat and update.effective_chat.id < 0:
+            logger.info(f"✅ [4] استثناء قناة (effective_chat): {update.effective_chat.id}")
+            return
+        
+        # استثناء 5: القناة المرتبطة في effective_chat (للتأكد)
+        if update.effective_chat and update.effective_chat.id == LINKED_CHANNEL_ID:
+            logger.info(f"✅ [5] استثناء: القناة المرتبطة {LINKED_CHANNEL_ID}")
+            return
+        
+        # استثناء 6: إذا لم يكن هناك مستخدم عادي
+        if not update.effective_user or update.effective_user.id < 0:
+            logger.info("✅ [6] استثناء: ليس مستخدم عادي")
+            return
+        
+        # استثناء 7: إذا كان المستخدم هو القناة نفسها (اسم المستخدم)
+        if update.effective_user and update.effective_user.id == LINKED_CHANNEL_ID:
+            logger.info(f"✅ [7] استثناء: المستخدم هو القناة {LINKED_CHANNEL_ID}")
+            return
+        
+        # ========== هنا يبدأ التحقق من المستخدمين العاديين فقط ==========
+        
         # التأكد من وجود رسالة نصية
         if not update.message or not update.message.text:
             return
-
-        # 🔥 استثناء جميع القنوات (المعرف السالب) - هذا يحل مشكلة القناة المرتبطة
-        if update.effective_chat and update.effective_chat.id < 0:
-            logger.info(f"✅ تم استثناء قناة: {update.effective_chat.id}")
-            # نكمل المعالجة للردود التلقائية دون التحقق من الاشتراك
-
+        
         message_text = update.message.text.strip()
-
+        
+        # استثناء الأوامر
         if message_text.startswith('/'):
             return
-
+        
         user = update.effective_user
-
-        # 🔥 نظام الاشتراك الإجباري - يطبق فقط على المستخدمين العاديين (معرف موجب)
+        
+        # تسجيل المجموعة إذا كانت جديدة
+        chat_id = update.effective_chat.id
+        if update.effective_chat.type != "private":
+            try:
+                with get_db() as conn:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO bot_groups (chat_id, chat_title) VALUES (?, ?)",
+                        (chat_id, update.effective_chat.title or "بدون عنوان")
+                    )
+                    conn.commit()
+            except Exception as e:
+                logger.error(f"خطأ في تسجيل المجموعة: {e}")
+        
+        # تطبيق الاشتراك الإجباري فقط على المستخدمين العاديين (معرف موجب)
         if user and user.id > 0 and update.effective_chat.type != "private":
             if not await check_subscription(user.id, context):
                 try:
@@ -456,7 +432,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         conn.commit()
                 except:
                     pass
-
+        
         # ========== الردود التلقائية ==========
         norm_text = normalize_text(message_text)
         if len(_replies_cache) == 0:
@@ -472,6 +448,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         return
                     except:
                         pass
+                        
     except Exception as e:
         logger.error(f"خطأ عام في handle_message: {e}")
 
