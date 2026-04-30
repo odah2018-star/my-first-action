@@ -7,11 +7,9 @@ from datetime import datetime, timedelta
 from typing import List, Tuple, Optional, Dict
 from contextlib import contextmanager
 
-# استيراد load_dotenv
 from dotenv import load_dotenv
 
-# ==================== إعدادات Proxy لـ PythonAnywhere ====================
-# يجب تفعيل هذه الأسطر للحساب المجاني
+# ==================== إعدادات Proxy ====================
 os.environ['HTTP_PROXY'] = 'http://proxy.pythonanywhere.com:8080'
 os.environ['HTTPS_PROXY'] = 'http://proxy.pythonanywhere.com:8080'
 os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
@@ -65,7 +63,7 @@ if admin_ids_str:
 AUTO_SEND_INTERVAL = int(os.getenv("AUTO_SEND_INTERVAL", "5"))
 DB_PATH = os.path.join(os.path.dirname(__file__), "bot_data.db")
 
-# 🔥 معرف القناة المرتبطة (ضع معرف قناتك هنا لتأكيد الاستثناء)
+# 🔥 معرف القناة المرتبطة - تأكد من صحة هذا الرقم
 LINKED_CHANNEL_ID = -1002882265751
 
 if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
@@ -79,7 +77,6 @@ print(f"🔗 معرف القناة المرتبطة: {LINKED_CHANNEL_ID}")
 # ==================== التخزين المؤقت ====================
 _replies_cache: Dict[str, str] = {}
 
-# ==================== إعدادات السجلات ====================
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -160,7 +157,6 @@ def init_db():
         for admin_id in ADMIN_IDS:
             cur.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (admin_id,))
         conn.commit()
-
     refresh_caches()
     add_default_replies()
     print("✅ تم تهيئة قاعدة البيانات بنجاح")
@@ -278,113 +274,52 @@ async def is_admin(user_id: int) -> bool:
     except:
         return False
 
-# ==================== دالة التحقق من الاشتراك ====================
+# ==================== نظام التحقق والاشتراك (المعدل) ====================
 async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """التحقق من الاشتراك - مع استثناء القنوات تماماً"""
+    """التحقق من الاشتراك مع استثناءات صارمة للقنوات"""
     
-    # 1. استثناء القنوات: إذا كان الطلب قادم من قناة
-    if context.effective_chat and context.effective_chat.type == "channel":
+    # استثناء معرف القناة المرتبطة
+    if user_id == LINKED_CHANNEL_ID:
         return True
     
-    # 2. استثناء معرف القناة المرتبطة مباشرة
-    if user_id == LINKED_CHANNEL_ID:
+    # استثناء القنوات والمجموعات
+    if user_id < 0:
         return True
 
     if not CHANNEL_LINK:
         return True
 
-    # 3. استثناء المعرفات السالبة (مجموعات وقنوات)
-    if user_id < 0:
+    # استثناء المشرفين
+    if user_id in ADMIN_IDS:
         return True
 
-    # 4. استثناء البوت نفسه
+    # استثناء البوت نفسه
     bot_user = await context.bot.get_me()
     if user_id == bot_user.id:
-        return True
-
-    # 5. استثناء المشرفين
-    if await is_admin(user_id):
         return True
 
     try:
         channel = CHANNEL_LINK.replace('@', '').replace('https://t.me/', '').strip()
         member = await context.bot.get_chat_member(chat_id=f"@{channel}", user_id=user_id)
         return member.status in ['member', 'administrator', 'creator']
-    except Exception as e:
-        logger.error(f"خطأ في التحقق من الاشتراك: {e}")
+    except Exception:
         return True
 
-async def delete_after_delay(message, delay: int):
-    await asyncio.sleep(delay)
-    try:
-        await message.delete()
-    except Exception as e:
-        logger.error(f"خطأ في حذف الرسالة: {e}")
-
-async def send_subscription_warning(update: Update, context: ContextTypes.DEFAULT_TYPE, user, warning_count: int):
-    bot_user = await context.bot.get_me()
-    if user.id == bot_user.id:
-        return
-    
-    if warning_count == 1:
-        delete_time = 60
-    elif warning_count == 2:
-        delete_time = 30
-    else:
-        delete_time = 20
-
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("📢 اضغط للاشتراك في قناة الجامعة 📢", url=f"https://t.me/{CHANNEL_LINK.replace('@', '')}")
-    ]])
-
-    warning_text = (
-        f"⚠️ *تحذير {warning_count}* ⚠️\n\n"
-        f"عذراً {user.first_name}، أنت غير مشترك في قناة الجامعة.\n"
-        f"❌ سيتم حذف رسالتك بعد *{delete_time}* ثانية.\n\n"
-        f"✨ يرجى الاشتراك ثم إعادة المحاولة ✨"
-    )
-
-    await update.message.reply_text(
-        warning_text,
-        reply_markup=keyboard,
-        parse_mode=ParseMode.MARKDOWN
-    )
-    asyncio.create_task(delete_after_delay(update.message, delete_time))
-
-# ==================== معالجة الرسائل الرئيسية ====================
+# ==================== معالجة الرسائل (الحل النهائي) ====================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة الرسائل والردود مع استثناء القنوات"""
+    """المعالج الرئيسي الذي يضمن عدم حذف منشورات القناة"""
     try:
-        # 🔥 الاستثناء 1: رسائل القنوات المباشرة
+        # 🛡️ الخط الدفاعي الأول: تجاهل منشورات القناة المباشرة تماماً
         if update.channel_post:
             return
-        
-        # 🔥 الاستثناء 2: الرسائل القادمة من قنوات (sender_chat)
+
+        # 🛡️ الخط الدفاعي الثاني: تجاهل الرسائل المحولة تلقائياً من القناة للمجموعة
         if update.message and update.message.sender_chat:
-            return
-        
-        # 🔥 الاستثناء 3: إذا كان نوع الدردشة قناة
-        if update.effective_chat and update.effective_chat.type == "channel":
-            return
-        
-        # 🔥 الاستثناء 4: إذا كان المعرف هو معرف القناة المرتبطة
-        if update.effective_chat and update.effective_chat.id == LINKED_CHANNEL_ID:
-            return
-        
-        # 🔥 الاستثناء 5: إذا كان المستخدم هو القناة المرتبطة
-        if update.effective_user and update.effective_user.id == LINKED_CHANNEL_ID:
+            logger.info(f"✅ استثناء: رسالة من قناة (sender_chat: {update.message.sender_chat.id})")
             return
 
-        # التأكد من وجود رسالة نصية ومستخدم فعال
-        if not update.message or not update.message.text:
-            return
-        if not update.effective_user:
-            return
-
-        # تجاهل الرسائل القديمة (لتجنب تراكم الردود عند التوقف)
-        now = datetime.now().timestamp()
-        msg_time = update.message.date.timestamp()
-        if msg_time < now - 10:
+        # التأكد من وجود رسالة نصية ومستخدم حقيقي
+        if not update.message or not update.message.text or not update.effective_user:
             return
 
         # استثناء البوت نفسه
@@ -392,42 +327,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user.id == bot_user.id:
             return
 
-        # استثناء المعرفات السالبة
-        if update.effective_user.id < 0:
-            return
-
         message_text = update.message.text.strip()
+
+        # تجاهل الأوامر
         if message_text.startswith('/'):
             return
 
-        # معالجة المجموعات فقط لتسجيلها ونظام الاشتراك
+        # تفعيل نظام الاشتراك في المجموعات فقط
         if update.effective_chat.type in ["group", "supergroup"]:
-            try:
-                with get_db() as conn:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO bot_groups (chat_id, chat_title) VALUES (?, ?)",
-                        (update.effective_chat.id, update.effective_chat.title or "بدون عنوان")
-                    )
-                    conn.commit()
-            except Exception as e:
-                logger.error(f"خطأ في تسجيل المجموعة: {e}")
-
-            # نظام الاشتراك الإجباري
-            user = update.effective_user
-            if not await check_subscription(user.id, context):
-                try:
-                    with get_db() as conn:
-                        cur = conn.cursor()
-                        cur.execute("INSERT OR IGNORE INTO violators_db (user_id, warnings) VALUES (?, 0)", (user.id,))
-                        cur.execute("UPDATE violators_db SET warnings = warnings + 1 WHERE user_id = ?", (user.id,))
-                        conn.commit()
-                        cur.execute("SELECT warnings FROM violators_db WHERE user_id = ?", (user.id,))
-                        row = cur.fetchone()
-                        warning_count = row[0] if row else 1
-                    await send_subscription_warning(update, context, user, warning_count)
-                    return
-                except Exception as e:
-                    logger.error(f"خطأ في نظام الاشتراك: {e}")
+            user_id = update.effective_user.id
+            
+            # استثناء المشرفين
+            if user_id in ADMIN_IDS:
+                pass  # السماح بالمرور
+            else:
+                # فحص الاشتراك للمستخدمين العاديين
+                if not await check_subscription(user_id, context):
+                    try:
+                        await update.message.delete()
+                        logger.info(f"🗑️ تم حذف رسالة المستخدم {user_id} (غير مشترك)")
+                        return
+                    except Exception as e:
+                        logger.error(f"خطأ في حذف الرسالة: {e}")
+                        return
 
         # ========== الردود التلقائية ==========
         norm_text = normalize_text(message_text)
@@ -443,7 +365,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     try:
                         await update.message.reply_text(response)
                         return
-                    except pass
+                    except:
+                        pass
+
     except Exception as e:
         logger.error(f"خطأ عام في handle_message: {e}")
 
@@ -480,19 +404,17 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
         ])
 
         await update.message.reply_text(welcome_text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
+        logger.info(f"✅ تم الترحيب بالعضو: {member.first_name}")
         break
 
 # ==================== نظام الرسائل المجدولة ====================
 async def send_scheduled_messages(app: Application):
-    """إرسال الرسائل المجدولة إلى جميع المجموعات"""
     try:
         with get_db() as conn:
             messages = conn.execute("SELECT * FROM scheduled_messages WHERE is_active = 1").fetchall()
             groups = conn.execute("SELECT chat_id FROM bot_groups WHERE is_active = 1").fetchall()
-
         if not messages or not groups:
             return
-
         now = datetime.now()
         for msg in messages:
             last_sent = None
@@ -503,17 +425,14 @@ async def send_scheduled_messages(app: Application):
                     last_sent = datetime.min
             else:
                 last_sent = datetime.min
-
             if now - last_sent < timedelta(minutes=msg['interval_minutes']):
                 continue
-
             for group in groups:
                 try:
                     await app.bot.send_message(group['chat_id'], msg['message_text'], parse_mode=ParseMode.MARKDOWN)
                     await asyncio.sleep(0.5)
                 except Exception as e:
                     logger.error(f"فشل إرسال رسالة مجدولة: {e}")
-
             with get_db() as conn:
                 conn.execute(
                     "UPDATE scheduled_messages SET last_sent = ? WHERE id = ?",
@@ -527,17 +446,14 @@ async def send_scheduled_messages(app: Application):
 async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ هذا الأمر خاص بالمشرفين فقط.")
-
     if len(context.args) < 2:
         return await update.message.reply_text(
             "📝 *إضافة رسالة مجدولة*\n\nالصيغة: `/schedule 120 نص الرسالة`",
             parse_mode=ParseMode.MARKDOWN
         )
-
     try:
         interval = int(context.args[0])
         message_text = ' '.join(context.args[1:])
-
         with get_db() as conn:
             cur = conn.cursor()
             cur.execute(
@@ -546,28 +462,28 @@ async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             conn.commit()
             msg_id = cur.lastrowid
-
-        await update.message.reply_text(f"✅ *تم الإضافة!*\n🆔 المعرف: `{msg_id}`\n⏰ كل {interval} دقيقة", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(
+            f"✅ *تم إضافة الرسالة المجدولة!*\n\n🆔 المعرف: `{msg_id}`\n⏰ كل {interval} دقيقة",
+            parse_mode=ParseMode.MARKDOWN
+        )
     except ValueError:
         await update.message.reply_text("❌ الفاصل الزمني يجب أن يكون رقماً")
 
 async def delschedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ هذا الأمر خاص بالمشرفين فقط.")
-
     if not context.args:
         return await update.message.reply_text("❌ مثال: `/delschedule 1`", parse_mode=ParseMode.MARKDOWN)
-
     try:
         msg_id = int(context.args[0])
         with get_db() as conn:
             cur = conn.cursor()
             cur.execute("SELECT message_text FROM scheduled_messages WHERE id = ?", (msg_id,))
-            if not cur.fetchone():
+            msg = cur.fetchone()
+            if not msg:
                 return await update.message.reply_text(f"❌ لا توجد رسالة رقم `{msg_id}`", parse_mode=ParseMode.MARKDOWN)
             cur.execute("DELETE FROM scheduled_messages WHERE id = ?", (msg_id,))
             conn.commit()
-
         await update.message.reply_text(f"✅ تم حذف الرسالة رقم `{msg_id}`", parse_mode=ParseMode.MARKDOWN)
     except ValueError:
         await update.message.reply_text("❌ يجب إدخال رقم صحيح")
@@ -575,18 +491,14 @@ async def delschedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def schedules_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ هذا الأمر خاص بالمشرفين فقط.")
-
     with get_db() as conn:
         messages = conn.execute("SELECT id, message_text, interval_minutes, is_active FROM scheduled_messages").fetchall()
-
     if not messages:
         return await update.message.reply_text("📭 لا توجد رسائل مجدولة.")
-
     text = "📋 *الرسائل المجدولة:*\n\n"
     for msg in messages:
         status = "✅" if msg['is_active'] else "❌"
-        text += f"{status} `{msg['id']}` | كل {msg['interval_minutes']} دقيقة\n📄 {msg['message_text'][:50]}...\n\n"
-
+        text += f"{status} `{msg['id']}` | كل {msg['interval_minutes']} دقيقة\n"
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 # ==================== أوامر القوائم المضمنة ====================
@@ -606,7 +518,10 @@ async def create_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         post_id = save_button_post(msg_text, btns_raw, cols)
         bot_username = (await context.bot.get_me()).username
         share_code = f"@{bot_username} {post_id}"
-        await update.message.reply_text(f"✅ تم إنشاء القائمة!\n\n🔢 رقم: `{post_id}`\n🔗 كود: `{share_code}`", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(
+            f"✅ تم إنشاء القائمة!\n\n🔢 رقم: `{post_id}`\n🔗 كود: `{share_code}`",
+            parse_mode=ParseMode.MARKDOWN
+        )
     except Exception as e:
         await update.message.reply_text(f"❌ خطأ: {e}")
 
@@ -642,7 +557,12 @@ async def publish_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text(f"❌ لا توجد قائمة رقم {post_id}")
         text_content, buttons_data, cols = post
         reply_markup = InlineKeyboardMarkup(parse_buttons(buttons_data, cols))
-        await context.bot.send_message(chat_id=target, text=text_content, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+        await context.bot.send_message(
+            chat_id=target,
+            text=text_content,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
         await update.message.reply_text(f"✅ تم نشر القائمة `{post_id}`", parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         await update.message.reply_text(f"❌ خطأ: {e}")
@@ -653,8 +573,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         buttons = get_custom_buttons()
         keyboard = None
         if buttons:
-            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(text, url=url)] for text, url in buttons])
-
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton(text, url=url)] for text, url in buttons
+            ])
         start_text = (
             f"🤖 *مرحباً! أنا بوت الخدمات الجامعية*\n\n"
             f"📋 *الأوامر المتاحة:*\n\n"
@@ -682,7 +603,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(start_text, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"خطأ في start: {e}")
-        await update.message.reply_text("🤖 أنا أعمل الآن!", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text("🤖 *مرحباً! أنا بوت الخدمات الجامعية*\n\nأنا أعمل الآن!", parse_mode=ParseMode.MARKDOWN)
 
 # ==================== أوامر الردود ====================
 async def add_reply_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -720,7 +641,8 @@ async def del_reply_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("SELECT response FROM auto_replies WHERE keyword = ?", (keyword,))
-        if not cur.fetchone():
+        result = cur.fetchone()
+        if not result:
             return await update.message.reply_text(f"❌ لا يوجد رد للكلمة `{keyword}`", parse_mode=ParseMode.MARKDOWN)
         cur.execute("DELETE FROM auto_replies WHERE keyword = ?", (keyword,))
         conn.commit()
@@ -728,7 +650,8 @@ async def del_reply_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ تم حذف الرد: `{keyword}`", parse_mode=ParseMode.MARKDOWN)
 
 async def replies_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not _replies_cache: refresh_caches()
+    if not _replies_cache:
+        refresh_caches()
     if not _replies_cache:
         return await update.message.reply_text("📭 لا توجد ردود حالياً.")
     reply_list = list(_replies_cache.items())[:30]
@@ -763,47 +686,40 @@ async def del_button_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def buttons_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = get_custom_buttons()
     if not buttons:
-        return await update.message.reply_text("📭 لا توجد أزرار.")
+        return await update.message.reply_text("📭 لا توجد أزرار.\nاستخدم `/addbutton` لإضافة زر.")
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(text, url=url)] for text, url in buttons])
     await update.message.reply_text("🔗 *الأزرار المتاحة:*", reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
 
-# ==================== أمر الإحصائيات ====================
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_admin(update.effective_user.id):
-        return await update.message.reply_text("⛔ هذا الأمر للمشرفين فقط.")
     try:
         with get_db() as conn:
             groups = conn.execute("SELECT COUNT(*) FROM bot_groups").fetchone()[0]
             replies = conn.execute("SELECT COUNT(*) FROM auto_replies").fetchone()[0]
             buttons = conn.execute("SELECT COUNT(*) FROM custom_buttons").fetchone()[0]
             scheduled = conn.execute("SELECT COUNT(*) FROM scheduled_messages WHERE is_active = 1").fetchone()[0]
-            violators = conn.execute("SELECT COUNT(*) FROM violators_db").fetchone()[0]
         await update.message.reply_text(
-            f"📊 *إحصائيات البوت*\n\n📢 المجموعات: {groups}\n📝 الردود: {replies}\n🔘 الأزرار: {buttons}\n⏰ رسائل مجدولة: {scheduled}\n🚫 المخالفين: {violators}\n👑 المشرفون: {len(ADMIN_IDS)}",
+            f"📊 *إحصائيات البوت*\n\n📢 المجموعات: {groups}\n📝 الردود: {replies}\n🔘 الأزرار: {buttons}\n⏰ رسائل مجدولة: {scheduled}\n👑 المشرفون: {len(ADMIN_IDS)}",
             parse_mode=ParseMode.MARKDOWN
         )
     except Exception as e:
         await update.message.reply_text(f"❌ خطأ: {e}")
 
-# ==================== معالجة الأخطاء ====================
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"حدث خطأ غير متوقع: {context.error}")
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"حدث خطأ: {context.error}")
 
-# ==================== الدالة الرئيسية للتشغيل ====================
+# ==================== تشغيل البوت ====================
 async def run_bot():
     print("\n" + "=" * 50)
     print("🚀 جاري تشغيل البوت...")
     print(f"👑 المشرفون: {ADMIN_IDS}")
     print(f"📢 قناة الاشتراك: {CHANNEL_LINK or 'غير مفعلة'}")
+    print(f"🔗 معرف القناة المرتبطة: {LINKED_CHANNEL_ID}")
     print("=" * 50 + "\n")
 
-    # تهيئة قاعدة البيانات
     init_db()
 
-    # إنشاء التطبيق
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # إضافة المعالجات
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("addreply", add_reply_cmd))
@@ -822,7 +738,6 @@ async def run_bot():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(error_handler)
 
-    # المهام المجدولة
     scheduler = AsyncIOScheduler()
     scheduler.add_job(send_scheduled_messages, IntervalTrigger(minutes=AUTO_SEND_INTERVAL), args=[app])
     scheduler.start()
@@ -830,7 +745,6 @@ async def run_bot():
     print(f"⏰ تم تفعيل نظام الرسائل المجدولة (فحص كل {AUTO_SEND_INTERVAL} دقيقة)")
     print("✅ البوت يعمل الآن! في انتظار الرسائل...\n")
 
-    # بدء البوت - مع تجاهل الرسائل المعلقة
     await app.initialize()
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
