@@ -31,14 +31,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 # ==================== تحميل الإعدادات ====================
-# الآن سيعمل هذا الجزء دون أخطاء
 possible_paths = [
     '/home/1fu300/.env',
     '/home/motaz2026/telegram-bot/.env',
     os.path.join(os.path.dirname(__file__), '.env'),
     '.env'
 ]
-# ... تكملة الكود الخاص بك
 
 env_loaded = False
 for path in possible_paths:
@@ -203,7 +201,6 @@ def add_default_replies():
         ("مساعدة", "📋 الأوامر المتاحة:\n/addreply - إضافة رد\n/delreply - حذف رد\n/replies - عرض الردود\n/stats - إحصائيات\n/schedule - إضافة رسالة مجدولة"),
         ("كيف حالك", "الحمد لله، أنا بخير! شكراً لسؤالك 😊"),
         ("بوت", "أنا بوت خدمي، أرد على الكلمات المفتاحية 🤖"),
-        # ("الجامعة", "جامعة القدس المفتوحة - نخدم طلابنا في كل مكان 🎓"),  # تم إلغاؤه
     ]
     try:
         with get_db() as conn:
@@ -326,6 +323,11 @@ async def delete_after_delay(message, delay: int):
         logger.error(f"خطأ في حذف الرسالة: {e}")
 
 async def send_subscription_warning(update: Update, context: ContextTypes.DEFAULT_TYPE, user, warning_count: int):
+    # 🔥 منع إرسال تحذير للبوت نفسه
+    bot_user = await context.bot.get_me()
+    if user.id == bot_user.id:
+        return
+    
     if warning_count == 1:
         delete_time = 60
     elif warning_count == 2:
@@ -352,11 +354,18 @@ async def send_subscription_warning(update: Update, context: ContextTypes.DEFAUL
 
     asyncio.create_task(delete_after_delay(update.message, delete_time))
 
-# ==================== معالجة الرسائل الرئيسية (المصلحة بالكامل) ====================
+# ==================== معالجة الرسائل الرئيسية (المعدلة) ====================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالجة الرسائل الواردة والردود التلقائية"""
 
     try:
+        # 🔥 الحل النهائي لمشكلة البوت - تجاهل البوت نفسه نهائياً
+        if update.effective_user:
+            bot_user = await context.bot.get_me()
+            if update.effective_user.id == bot_user.id:
+                logger.info("✅ تم تجاهل رسالة من البوت نفسه")
+                return
+        
         # استثناء رسائل القنوات
         if update.channel_post:
             return
@@ -372,11 +381,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"تجاهل رسالة قديمة من {update.effective_user.id} (فارق {now - msg_time:.0f} ثانية)")
             return
 
-        # استثناء البوت نفسه
-        bot_user = await context.bot.get_me()
-        if update.effective_user and update.effective_user.id == bot_user.id:
-            return
-
         message_text = update.message.text.strip()
 
         # استثناء الأوامر (التي تبدأ بـ /)
@@ -385,7 +389,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # استثناء المحادثات الخاصة (اختياري)
         if update.effective_chat.type == "private":
-            # يمكنك تفعيل الردود في الخاص أو تعطيلها
             pass
 
         # تسجيل المجموعة
@@ -896,11 +899,9 @@ async def run_bot():
     print(f"⏰ تم تفعيل نظام الرسائل المجدولة (فحص كل {AUTO_SEND_INTERVAL} دقيقة)")
     print("✅ البوت يعمل الآن! في انتظار الرسائل...\n")
 
-    # بدء البوت - مع تجاهل الرسائل المعلقة (الميزة الجديدة)
+    # بدء البوت - مع تجاهل الرسائل المعلقة
     await app.initialize()
     await app.start()
-
-    # 🔥 الميزة المطلوبة: تجاهل جميع الرسائل التي أرسلت أثناء توقف البوت
     await app.updater.start_polling(drop_pending_updates=True)
 
     try:
