@@ -340,11 +340,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.channel_post:
             return
 
-        # استثناء القناة المرتبطة - المعرف الخاص بقناتك
-        if update.effective_chat and update.effective_chat.id == -1002882265751:
-            logger.info(f"✅ تم استثناء القناة المرتبطة: {update.effective_chat.id}")
-            # نكمل المعالجة للردود التلقائية بدون التحقق من الاشتراك
-
+        # 🔥 استثناء شامل لكل الرسائل القادمة من قنوات (أي معرف سالب)
+        if update.effective_chat and update.effective_chat.id < 0:
+            # معرف قناتك المحددة -3308824111158 (القناة التي تنشر في المجموعة)
+            # أي قناة أخرى ذات معرف سالب سيتم استثناؤها أيضاً
+            logger.info(f"✅ تم استثناء قناة: {update.effective_chat.id}")
+            # نسمح للقناة بالنشر دون التحقق من الاشتراك
+            # نستمر في المعالجة للردود التلقائية
+            pass
+            
         if not update.message or not update.message.text:
             return
 
