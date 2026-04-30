@@ -7,6 +7,16 @@ from datetime import datetime, timedelta
 from typing import List, Tuple, Optional, Dict
 from contextlib import contextmanager
 
+# استيراد load_dotenv ضروري قبل استخدامه في السطر 31
+from dotenv import load_dotenv
+
+# ==================== إعدادات Proxy لـ PythonAnywhere ====================
+# يجب تفعيل هذه الأسطر للحساب المجاني
+os.environ['HTTP_PROXY'] = 'http://proxy.pythonanywhere.com:8080'
+os.environ['HTTPS_PROXY'] = 'http://proxy.pythonanywhere.com:8080'
+os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
+
+# الآن بقية الاستيرادات الخاصة بـ telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent
 from telegram.ext import (
     Application,
@@ -17,16 +27,11 @@ from telegram.ext import (
     InlineQueryHandler,
 )
 from telegram.constants import ParseMode
-from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-# ==================== إعدادات Proxy لـ PythonAnywhere ====================
-# os.environ['HTTP_PROXY'] = 'http://proxy.pythonanywhere.com:8080'
-# os.environ['HTTPS_PROXY'] = 'http://proxy.pythonanywhere.com:8080'
-# os.environ['NO_PROXY'] = 'localhost,127.0.0.1,api.telegram.org'
-
 # ==================== تحميل الإعدادات ====================
+# الآن سيعمل هذا الجزء دون أخطاء
 possible_paths = [
     '/home/1fu300/.env',
     '/home/motaz2026/telegram-bot/.env',
@@ -94,7 +99,7 @@ def init_db():
     global _replies_cache
     with get_db() as conn:
         cur = conn.cursor()
-        
+
         # جدول الردود التلقائية
         cur.execute("""
             CREATE TABLE IF NOT EXISTS auto_replies (
@@ -104,7 +109,7 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
         # جدول الرسائل المجدولة
         cur.execute("""
             CREATE TABLE IF NOT EXISTS scheduled_messages (
@@ -116,7 +121,7 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
         # جدول المجموعات
         cur.execute("""
             CREATE TABLE IF NOT EXISTS bot_groups (
@@ -126,7 +131,7 @@ def init_db():
                 added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
         # جدول المخالفين
         cur.execute("""
             CREATE TABLE IF NOT EXISTS violators_db (
@@ -135,14 +140,14 @@ def init_db():
                 last_violation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
         # جدول المشرفين
         cur.execute("""
             CREATE TABLE IF NOT EXISTS admins (
                 user_id INTEGER PRIMARY KEY
             )
         """)
-        
+
         # جدول الأزرار المخصصة
         cur.execute("""
             CREATE TABLE IF NOT EXISTS custom_buttons (
@@ -153,7 +158,7 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
         # جدول القوائم المضمنة
         cur.execute("""
             CREATE TABLE IF NOT EXISTS button_posts (
@@ -164,13 +169,13 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
         conn.commit()
-        
+
         for admin_id in ADMIN_IDS:
             cur.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (admin_id,))
         conn.commit()
-    
+
     refresh_caches()
     add_default_replies()
     print("✅ تم تهيئة قاعدة البيانات بنجاح")
@@ -197,14 +202,13 @@ def add_default_replies():
         ("مساعدة", "📋 الأوامر المتاحة:\n/addreply - إضافة رد\n/delreply - حذف رد\n/replies - عرض الردود\n/stats - إحصائيات\n/schedule - إضافة رسالة مجدولة"),
         ("كيف حالك", "الحمد لله، أنا بخير! شكراً لسؤالك 😊"),
         ("بوت", "أنا بوت خدمي، أرد على الكلمات المفتاحية 🤖"),
-        # ("الجامعة", "جامعة القدس المفتوحة - نخدم طلابنا في كل مكان 🎓"),  # تم إلغاؤه
-    ]    
+    ]
     try:
         with get_db() as conn:
             cur = conn.cursor()
             cur.execute("SELECT COUNT(*) FROM auto_replies")
             count = cur.fetchone()[0]
-            
+
             if count == 0:
                 for keyword, response in default_replies:
                     cur.execute("INSERT OR IGNORE INTO auto_replies (keyword, response) VALUES (?, ?)", (keyword, response))
@@ -293,17 +297,17 @@ async def is_admin(user_id: int) -> bool:
 async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if not CHANNEL_LINK:
         return True
-    
+
     if user_id < 0:
         return True
-    
+
     bot_user = await context.bot.get_me()
     if user_id == bot_user.id:
         return True
-    
+
     if await is_admin(user_id):
         return True
-    
+
     try:
         channel = CHANNEL_LINK.replace('@', '').replace('https://t.me/', '').strip()
         member = await context.bot.get_chat_member(chat_id=f"@{channel}", user_id=user_id)
@@ -320,85 +324,97 @@ async def delete_after_delay(message, delay: int):
         logger.error(f"خطأ في حذف الرسالة: {e}")
 
 async def send_subscription_warning(update: Update, context: ContextTypes.DEFAULT_TYPE, user, warning_count: int):
+    # 🔥 منع إرسال تحذير للبوت نفسه
+    bot_user = await context.bot.get_me()
+    if user.id == bot_user.id:
+        return
+    
     if warning_count == 1:
         delete_time = 60
     elif warning_count == 2:
         delete_time = 30
     else:
         delete_time = 20
-    
+
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("📢 اضغط للاشتراك في قناة الجامعة 📢", url=f"https://t.me/{CHANNEL_LINK.replace('@', '')}")
     ]])
-    
+
     warning_text = (
         f"⚠️ *تحذير {warning_count}* ⚠️\n\n"
         f"عذراً {user.first_name}، أنت غير مشترك في قناة الجامعة.\n"
         f"❌ سيتم حذف رسالتك بعد *{delete_time}* ثانية.\n\n"
         f"✨ يرجى الاشتراك ثم إعادة المحاولة ✨"
     )
-    
+
     await update.message.reply_text(
         warning_text,
         reply_markup=keyboard,
         parse_mode=ParseMode.MARKDOWN
     )
-    
+
     asyncio.create_task(delete_after_delay(update.message, delete_time))
 
-# ==================== معالجة الرسائل الرئيسية (المصلحة بالكامل) ====================
+# ==================== معالجة الرسائل الرئيسية (المعدلة) ====================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالجة الرسائل الواردة والردود التلقائية"""
-    
+
     try:
+        # 🔥 الحل النهائي لمشكلة البوت - تجاهل البوت نفسه نهائياً
+        if update.effective_user:
+            bot_user = await context.bot.get_me()
+            if update.effective_user.id == bot_user.id:
+                logger.info("✅ تم تجاهل رسالة من البوت نفسه")
+                return
+        
         # استثناء رسائل القنوات
         if update.channel_post:
             return
-        
+
+        # 🆕 استثناء القناة المرتبطة - السماح لها بالنشر بدون تحقق
+        if update.effective_chat and update.effective_chat.id == -1002882265751:
+            logger.info(f"✅ تم استثناء القناة المرتبطة: {update.effective_chat.id}")
+            # نمرر إلى الردود التلقائية مباشرة دون التحقق من الاشتراك
+
         # التأكد من وجود رسالة نصية
         if not update.message or not update.message.text:
             return
-        
+
         # 🚫 ميزة تجاهل الرسائل القديمة (أكثر من 5 ثوانٍ) - حماية إضافية
         now = datetime.now().timestamp()
         msg_time = update.message.date.timestamp()
         if msg_time < now - 5:
             logger.info(f"تجاهل رسالة قديمة من {update.effective_user.id} (فارق {now - msg_time:.0f} ثانية)")
             return
-        
-        # استثناء البوت نفسه
-        bot_user = await context.bot.get_me()
-        if update.effective_user and update.effective_user.id == bot_user.id:
-            return
-        
+
         message_text = update.message.text.strip()
-        
+
         # استثناء الأوامر (التي تبدأ بـ /)
         if message_text.startswith('/'):
             return
-        
+
         # استثناء المحادثات الخاصة (اختياري)
         if update.effective_chat.type == "private":
-            # يمكنك تفعيل الردود في الخاص أو تعطيلها
             pass
-        
+
         # تسجيل المجموعة
         chat_id = update.effective_chat.id
         if update.effective_chat.type != "private":
             try:
                 with get_db() as conn:
                     conn.execute(
-                        "INSERT OR IGNORE INTO bot_groups (chat_id, chat_title) VALUES (?, ?)", 
+                        "INSERT OR IGNORE INTO bot_groups (chat_id, chat_title) VALUES (?, ?)",
                         (chat_id, update.effective_chat.title or "بدون عنوان")
                     )
                     conn.commit()
             except Exception as e:
                 logger.error(f"خطأ في تسجيل المجموعة: {e}")
-        
+
         user = update.effective_user
-        
+
         # نظام الاشتراك الإجباري (للمجموعات فقط)
-        if update.effective_chat.type != "private":
+        # 🔥 استثناء القناة المرتبطة من التحقق
+        if update.effective_chat.type != "private" and update.effective_chat.id != -1002882265751:
             if not await check_subscription(user.id, context):
                 try:
                     with get_db() as conn:
@@ -406,16 +422,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         cur.execute("INSERT OR IGNORE INTO violators_db (user_id, warnings) VALUES (?, 0)", (user.id,))
                         cur.execute("UPDATE violators_db SET warnings = warnings + 1 WHERE user_id = ?", (user.id,))
                         conn.commit()
-                        
+
                         cur.execute("SELECT warnings FROM violators_db WHERE user_id = ?", (user.id,))
                         row = cur.fetchone()
                         warning_count = row[0] if row else 1
-                    
+
                     await send_subscription_warning(update, context, user, warning_count)
                     return
                 except Exception as e:
                     logger.error(f"خطأ في نظام الاشتراك: {e}")
-            
+
             # إعادة تعيين التحذيرات للمشتركين
             try:
                 with get_db() as conn:
@@ -423,14 +439,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     conn.commit()
             except:
                 pass
-        
+
         # ========== الردود التلقائية ==========
         norm_text = normalize_text(message_text)
-        
+
         # تحديث الذاكرة المؤقتة إذا كانت فارغة
         if len(_replies_cache) == 0:
             refresh_caches()
-        
+
         for keyword, response in _replies_cache.items():
             if normalize_text(keyword) in norm_text:
                 try:
@@ -442,7 +458,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         return
                     except:
                         logger.error(f"خطأ في إرسال الرد: {e}")
-        
+
     except Exception as e:
         logger.error(f"خطأ عام في handle_message: {e}")
 
@@ -450,16 +466,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.new_chat_members:
         return
-    
+
     if update.channel_post:
         return
-    
+
     chat_title = update.effective_chat.title or "المجموعة"
-    
+
     for member in update.message.new_chat_members:
         if member.id == context.bot.id:
             continue
-        
+
         welcome_text = f"""🎉 *أهلاً وسهلاً بك يا {member.first_name}!* 🎉
 
 نرحب بك في {chat_title} 🌸
@@ -471,12 +487,12 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
 • احترام الأعضاء
 
 🤖 يمكنك استخدام /start لمعرفة أوامر البوت"""
-        
+
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("📘 فيسبوك", url="https://www.facebook.com/groups/qou202")],
             [InlineKeyboardButton("📷 إنستغرام", url="https://www.instagram.com/qou_TM1/")],
         ])
-        
+
         await update.message.reply_text(welcome_text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
         logger.info(f"✅ تم الترحيب بالعضو: {member.first_name}")
         break
@@ -488,10 +504,10 @@ async def send_scheduled_messages(app: Application):
         with get_db() as conn:
             messages = conn.execute("SELECT * FROM scheduled_messages WHERE is_active = 1").fetchall()
             groups = conn.execute("SELECT chat_id FROM bot_groups WHERE is_active = 1").fetchall()
-        
+
         if not messages or not groups:
             return
-        
+
         now = datetime.now()
         for msg in messages:
             last_sent = None
@@ -502,17 +518,17 @@ async def send_scheduled_messages(app: Application):
                     last_sent = datetime.min
             else:
                 last_sent = datetime.min
-            
+
             if now - last_sent < timedelta(minutes=msg['interval_minutes']):
                 continue
-            
+
             for group in groups:
                 try:
                     await app.bot.send_message(group['chat_id'], msg['message_text'], parse_mode=ParseMode.MARKDOWN)
                     await asyncio.sleep(0.5)
                 except Exception as e:
                     logger.error(f"فشل إرسال رسالة مجدولة: {e}")
-            
+
             with get_db() as conn:
                 conn.execute(
                     "UPDATE scheduled_messages SET last_sent = ? WHERE id = ?",
@@ -527,7 +543,7 @@ async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """إضافة رسالة مجدولة: /schedule 120 نص الرسالة"""
     if not await is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ هذا الأمر خاص بالمشرفين فقط.")
-    
+
     if len(context.args) < 2:
         return await update.message.reply_text(
             "📝 *إضافة رسالة مجدولة*\n\n"
@@ -535,11 +551,11 @@ async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "مثال: `/schedule 60 تذكير: الاجتماع اليوم`",
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
     try:
         interval = int(context.args[0])
         message_text = ' '.join(context.args[1:])
-        
+
         with get_db() as conn:
             cur = conn.cursor()
             cur.execute(
@@ -548,7 +564,7 @@ async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             conn.commit()
             msg_id = cur.lastrowid
-        
+
         await update.message.reply_text(
             f"✅ *تم إضافة الرسالة المجدولة!*\n\n"
             f"🆔 المعرف: `{msg_id}`\n"
@@ -563,23 +579,23 @@ async def delschedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """حذف رسالة مجدولة: /delschedule 1"""
     if not await is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ هذا الأمر خاص بالمشرفين فقط.")
-    
+
     if not context.args:
         return await update.message.reply_text("❌ مثال: `/delschedule 1`", parse_mode=ParseMode.MARKDOWN)
-    
+
     try:
         msg_id = int(context.args[0])
         with get_db() as conn:
             cur = conn.cursor()
             cur.execute("SELECT message_text FROM scheduled_messages WHERE id = ?", (msg_id,))
             msg = cur.fetchone()
-            
+
             if not msg:
                 return await update.message.reply_text(f"❌ لا توجد رسالة رقم `{msg_id}`", parse_mode=ParseMode.MARKDOWN)
-            
+
             cur.execute("DELETE FROM scheduled_messages WHERE id = ?", (msg_id,))
             conn.commit()
-            
+
             await update.message.reply_text(f"✅ تم حذف الرسالة رقم `{msg_id}`", parse_mode=ParseMode.MARKDOWN)
     except ValueError:
         await update.message.reply_text("❌ يجب إدخال رقم صحيح")
@@ -588,33 +604,33 @@ async def schedules_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """عرض جميع الرسائل المجدولة"""
     if not await is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ هذا الأمر خاص بالمشرفين فقط.")
-    
+
     with get_db() as conn:
         messages = conn.execute("SELECT id, message_text, interval_minutes, is_active FROM scheduled_messages").fetchall()
-    
+
     if not messages:
         return await update.message.reply_text("📭 لا توجد رسائل مجدولة.\nاستخدم `/schedule 120 نص`")
-    
+
     text = "📋 *الرسائل المجدولة:*\n\n"
     for msg in messages:
         status = "✅" if msg['is_active'] else "❌"
         text += f"{status} `{msg['id']}` | كل {msg['interval_minutes']} دقيقة\n📄 {msg['message_text'][:50]}...\n\n"
-    
+
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 # ==================== أوامر القوائم المضمنة ====================
 async def create_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ هذا الأمر خاص بالمشرفين فقط.")
-    
+
     if not update.message.text:
         return
-    
+
     try:
         parts = update.message.text.split('\n', 2)
         if len(parts) < 3:
             raise ValueError("الصيغة غير مكتملة")
-        
+
         cmd_part = parts[0].split()
         cols = int(cmd_part[1]) if len(cmd_part) > 1 else 2
         msg_text = parts[1]
@@ -623,7 +639,7 @@ async def create_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         post_id = save_button_post(msg_text, btns_raw, cols)
         bot_username = (await context.bot.get_me()).username
         share_code = f"@{bot_username} {post_id}"
-        
+
         await update.message.reply_text(
             f"✅ تم إنشاء القائمة!\n\n🔢 رقم: `{post_id}`\n🔗 كود: `{share_code}`\n📤 للنشر: `/publish {post_id} @username`",
             parse_mode=ParseMode.MARKDOWN
@@ -635,12 +651,12 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.inline_query.query
     if not query.isdigit():
         return
-    
+
     post = get_button_post(int(query))
     if post:
         text_content, buttons_data, cols = post
         reply_markup = InlineKeyboardMarkup(parse_buttons(buttons_data, cols))
-        
+
         results = [
             InlineQueryResultArticle(
                 id=str(query),
@@ -655,21 +671,21 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 async def publish_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ هذا الأمر خاص بالمشرفين فقط.")
-    
+
     if len(context.args) < 2:
         return await update.message.reply_text("❌ استخدم: `/publish رقم @chat_id`")
-    
+
     try:
         post_id = int(context.args[0])
         target = context.args[1]
-        
+
         post = get_button_post(post_id)
         if not post:
             return await update.message.reply_text(f"❌ لا توجد قائمة رقم {post_id}")
-        
+
         text_content, buttons_data, cols = post
         reply_markup = InlineKeyboardMarkup(parse_buttons(buttons_data, cols))
-        
+
         await context.bot.send_message(
             chat_id=target,
             text=text_content,
@@ -690,7 +706,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton(text, url=url)] for text, url in buttons
             ])
-        
+
         start_text = (
             f"🤖 *مرحباً! أنا بوت الخدمات الجامعية*\n\n"
             f"📋 *الأوامر المتاحة:*\n\n"
@@ -712,7 +728,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• `/stats` - إحصائيات\n\n"
             f"🔒 الاشتراك: {'✅ مفعل' if CHANNEL_LINK else '❌ غير مفعل'}"
         )
-        
+
         if keyboard:
             await update.message.reply_text(start_text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
         else:
@@ -725,31 +741,31 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_reply_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ هذا الأمر خاص بالمشرفين فقط.")
-    
+
     if not context.args:
         return await update.message.reply_text("❌ الصيغة: `/addreply كلمة : الرد`", parse_mode=ParseMode.MARKDOWN)
-    
+
     try:
         text = ' '.join(context.args)
         if ':' not in text:
             return await update.message.reply_text("❌ استخدم `:` للفصل", parse_mode=ParseMode.MARKDOWN)
-        
+
         parts = text.split(':', 1)
         keyword = parts[0].strip().lower()
         response = parts[1].strip()
-        
+
         if not keyword or not response:
             return await update.message.reply_text("❌ الكلمة والرد مطلوبان")
-        
+
         with get_db() as conn:
             cur = conn.cursor()
             cur.execute("SELECT 1 FROM auto_replies WHERE keyword = ?", (keyword,))
             if cur.fetchone():
                 return await update.message.reply_text(f"⚠️ الكلمة `{keyword}` موجودة مسبقاً!", parse_mode=ParseMode.MARKDOWN)
-            
+
             cur.execute("INSERT INTO auto_replies (keyword, response) VALUES (?, ?)", (keyword, response))
             conn.commit()
-        
+
         refresh_caches()
         await update.message.reply_text(f"✅ تم إضافة الرد: `{keyword}`", parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
@@ -758,49 +774,49 @@ async def add_reply_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def del_reply_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ هذا الأمر خاص بالمشرفين فقط.")
-    
+
     if not context.args:
         return await update.message.reply_text("❌ مثال: `/delreply مرحبا`", parse_mode=ParseMode.MARKDOWN)
-    
+
     keyword = ' '.join(context.args).strip().lower()
-    
+
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("SELECT response FROM auto_replies WHERE keyword = ?", (keyword,))
         result = cur.fetchone()
-        
+
         if not result:
             return await update.message.reply_text(f"❌ لا يوجد رد للكلمة `{keyword}`", parse_mode=ParseMode.MARKDOWN)
-        
+
         cur.execute("DELETE FROM auto_replies WHERE keyword = ?", (keyword,))
         conn.commit()
-    
+
     refresh_caches()
     await update.message.reply_text(f"✅ تم حذف الرد: `{keyword}`", parse_mode=ParseMode.MARKDOWN)
 
 async def replies_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _replies_cache:
         refresh_caches()
-    
+
     if not _replies_cache:
         return await update.message.reply_text("📭 لا توجد ردود حالياً.\nاستخدم `/addreply` لإضافة رد.")
-    
+
     reply_list = list(_replies_cache.items())[:30]
     text = "📋 *قائمة الردود:*\n\n"
     for i, (keyword, response) in enumerate(reply_list, 1):
         short_response = response[:40] + "..." if len(response) > 40 else response
         text += f"{i}. `{keyword}` → {short_response}\n"
-    
+
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 # ==================== أوامر الأزرار ====================
 async def add_button_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ هذا الأمر خاص بالمشرفين فقط.")
-    
+
     if len(context.args) < 2 or ':' not in ' '.join(context.args):
         return await update.message.reply_text("❌ مثال: `/addbutton فيسبوك : https://facebook.com`", parse_mode=ParseMode.MARKDOWN)
-    
+
     text = ' '.join(context.args)
     button_text, button_url = text.split(':', 1)
     if add_custom_button(button_text.strip(), button_url.strip()):
@@ -811,7 +827,7 @@ async def add_button_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def del_button_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ هذا الأمر خاص بالمشرفين فقط.")
-    
+
     button_text = ' '.join(context.args)
     if delete_custom_button(button_text):
         await update.message.reply_text(f"✅ تم حذف الزر: `{button_text}`", parse_mode=ParseMode.MARKDOWN)
@@ -822,7 +838,7 @@ async def buttons_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = get_custom_buttons()
     if not buttons:
         return await update.message.reply_text("📭 لا توجد أزرار.\nاستخدم `/addbutton` لإضافة زر.")
-    
+
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(text, url=url)] for text, url in buttons])
     await update.message.reply_text("🔗 *الأزرار المتاحة:*", reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
 
@@ -833,7 +849,7 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             replies = conn.execute("SELECT COUNT(*) FROM auto_replies").fetchone()[0]
             buttons = conn.execute("SELECT COUNT(*) FROM custom_buttons").fetchone()[0]
             scheduled = conn.execute("SELECT COUNT(*) FROM scheduled_messages WHERE is_active = 1").fetchone()[0]
-        
+
         await update.message.reply_text(
             f"📊 *إحصائيات البوت*\n\n"
             f"📢 المجموعات: {groups}\n"
@@ -856,13 +872,13 @@ async def run_bot():
     print(f"👑 المشرفون: {ADMIN_IDS}")
     print(f"📢 قناة الاشتراك: {CHANNEL_LINK or 'غير مفعلة'}")
     print("=" * 50 + "\n")
-    
+
     # تهيئة قاعدة البيانات
     init_db()
-    
+
     # إنشاء التطبيق
     app = Application.builder().token(BOT_TOKEN).build()
-    
+
     # إضافة المعالجات
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("stats", stats_cmd))
@@ -881,22 +897,20 @@ async def run_bot():
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(error_handler)
-    
+
     # المهام المجدولة
     scheduler = AsyncIOScheduler()
     scheduler.add_job(send_scheduled_messages, IntervalTrigger(minutes=AUTO_SEND_INTERVAL), args=[app])
     scheduler.start()
-    
+
     print(f"⏰ تم تفعيل نظام الرسائل المجدولة (فحص كل {AUTO_SEND_INTERVAL} دقيقة)")
     print("✅ البوت يعمل الآن! في انتظار الرسائل...\n")
-    
-    # بدء البوت - مع تجاهل الرسائل المعلقة (الميزة الجديدة)
+
+    # بدء البوت - مع تجاهل الرسائل المعلقة
     await app.initialize()
     await app.start()
-    
-    # 🔥 الميزة المطلوبة: تجاهل جميع الرسائل التي أرسلت أثناء توقف البوت
     await app.updater.start_polling(drop_pending_updates=True)
-    
+
     try:
         while True:
             await asyncio.sleep(3600)
