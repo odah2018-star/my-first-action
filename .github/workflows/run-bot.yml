@@ -4,15 +4,11 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
-  # التشغيل المجدول معطل حالياً لمنع التعارضات
-  # schedule:
-  #   - cron: '*/5 * * * *'
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     
-    # 🔥 هذا يمنع تشغيل نسختين في نفس الوقت - الحل النهائي
     concurrency:
       group: telegram-bot
       cancel-in-progress: true
@@ -36,4 +32,4 @@ jobs:
         ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
         AUTO_SEND_INTERVAL: ${{ secrets.AUTO_SEND_INTERVAL }}
       run: |
-        python bot.py
+        python main.py
