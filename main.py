@@ -274,7 +274,7 @@ async def is_admin(user_id: int) -> bool:
     except:
         return False
 
-# ==================== نظام التحقق والاشتراك (المعدل) ====================
+# ==================== نظام التحقق والاشتراك ====================
 async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """التحقق من الاشتراك مع استثناءات صارمة للقنوات"""
 
@@ -282,7 +282,7 @@ async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -
     if user_id == LINKED_CHANNEL_ID:
         return True
 
-    # استثناء القنوات والمجموعات
+    # استثناء القنوات والمجموعات (معرف سالب)
     if user_id < 0:
         return True
 
@@ -305,17 +305,59 @@ async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -
     except Exception:
         return True
 
+# ==================== دوال التحذير والحذف ====================
+async def delete_after_delay(message, delay: int):
+    await asyncio.sleep(delay)
+    try:
+        await message.delete()
+    except Exception as e:
+        logger.error(f"خطأ في حذف الرسالة: {e}")
+
+async def send_subscription_warning(update: Update, context: ContextTypes.DEFAULT_TYPE, user, warning_count: int):
+    """إرسال تحذير للمستخدم غير المشترك"""
+    if warning_count == 1:
+        delete_time = 60
+    elif warning_count == 2:
+        delete_time = 30
+    else:
+        delete_time = 20
+
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("📢 اضغط للاشتراك في قناة الجامعة 📢", url=f"https://t.me/{CHANNEL_LINK.replace('@', '')}")
+    ]])
+
+    warning_text = (
+        f"⚠️ *تحذير {warning_count}* ⚠️\n\n"
+        f"عذراً {user.first_name}، أنت غير مشترك في قناة الجامعة.\n"
+        f"❌ سيتم حذف رسالتك بعد *{delete_time}* ثانية.\n\n"
+        f"✨ يرجى الاشتراك ثم إعادة المحاولة ✨"
+    )
+
+    await update.message.reply_text(
+        warning_text,
+        reply_markup=keyboard,
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+    asyncio.create_task(delete_after_delay(update.message, delete_time))
+
 # ==================== معالجة الرسائل (الحل النهائي) ====================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """المعالج الرئيسي الذي يضمن عدم حذف منشورات القناة"""
+    """المعالج الرئيسي - يرسل تحذيراً قبل حذف رسائل غير المشتركين"""
     try:
-        # 🛡️ الخط الدفاعي الأول: تجاهل منشورات القناة المباشرة تماماً
+        # 🛡️ استثناء 1: تجاهل منشورات القناة المباشرة
         if update.channel_post:
+            logger.info("✅ استثناء: channel_post")
             return
 
-        # 🛡️ الخط الدفاعي الثاني: تجاهل الرسائل المحولة تلقائياً من القناة للمجموعة
+        # 🛡️ استثناء 2: تجاهل الرسائل المحولة من القناة للمجموعة (الأهم)
         if update.message and update.message.sender_chat:
             logger.info(f"✅ استثناء: رسالة من قناة (sender_chat: {update.message.sender_chat.id})")
+            return
+
+        # 🛡️ استثناء 3: إذا كان نوع الدردشة قناة
+        if update.effective_chat and update.effective_chat.type == "channel":
+            logger.info("✅ استثناء: effective_chat.type == channel")
             return
 
         # التأكد من وجود رسالة نصية ومستخدم حقيقي
@@ -327,29 +369,50 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user.id == bot_user.id:
             return
 
+        # استثناء المعرفات السالبة
+        if update.effective_user.id < 0:
+            logger.info(f"✅ استثناء: معرف سالب {update.effective_user.id}")
+            return
+
         message_text = update.message.text.strip()
 
-        # تجاهل الأوامر
+        # استثناء الأوامر
         if message_text.startswith('/'):
             return
 
         # تفعيل نظام الاشتراك في المجموعات فقط
         if update.effective_chat.type in ["group", "supergroup"]:
             user_id = update.effective_user.id
+            user = update.effective_user
 
             # استثناء المشرفين
             if user_id in ADMIN_IDS:
-                pass  # السماح بالمرور
+                pass  # السماح بالمرور بدون تحذير
             else:
                 # فحص الاشتراك للمستخدمين العاديين
                 if not await check_subscription(user_id, context):
                     try:
-                        await update.message.delete()
-                        logger.info(f"🗑️ تم حذف رسالة المستخدم {user_id} (غير مشترك)")
+                        with get_db() as conn:
+                            cur = conn.cursor()
+                            cur.execute("INSERT OR IGNORE INTO violators_db (user_id, warnings) VALUES (?, 0)", (user_id,))
+                            cur.execute("UPDATE violators_db SET warnings = warnings + 1 WHERE user_id = ?", (user_id,))
+                            conn.commit()
+                            cur.execute("SELECT warnings FROM violators_db WHERE user_id = ?", (user_id,))
+                            row = cur.fetchone()
+                            warning_count = row[0] if row else 1
+
+                        await send_subscription_warning(update, context, user, warning_count)
                         return
                     except Exception as e:
-                        logger.error(f"خطأ في حذف الرسالة: {e}")
-                        return
+                        logger.error(f"خطأ في نظام الاشتراك: {e}")
+                else:
+                    # إعادة تعيين التحذيرات للمستخدم المشترك
+                    try:
+                        with get_db() as conn:
+                            conn.execute("DELETE FROM violators_db WHERE user_id = ?", (user_id,))
+                            conn.commit()
+                    except:
+                        pass
 
         # ========== الردود التلقائية ==========
         norm_text = normalize_text(message_text)
