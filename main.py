@@ -277,11 +277,11 @@ async def is_admin(user_id: int) -> bool:
 # ==================== نظام التحقق والاشتراك (المعدل) ====================
 async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """التحقق من الاشتراك مع استثناءات صارمة للقنوات"""
-    
+
     # استثناء معرف القناة المرتبطة
     if user_id == LINKED_CHANNEL_ID:
         return True
-    
+
     # استثناء القنوات والمجموعات
     if user_id < 0:
         return True
@@ -307,51 +307,49 @@ async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -
 
 # ==================== معالجة الرسائل (الحل النهائي) ====================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالج تشخيصي - يظهر كل شيء"""
+    """المعالج الرئيسي الذي يضمن عدم حذف منشورات القناة"""
     try:
-        # ========== تشخيص كامل للرسالة ==========
-        logger.info("=" * 60)
-        logger.info("📨 رسالة جديدة - تشخيص كامل")
-        
-        # هل هي رسالة قناة مباشرة؟
-        logger.info(f"1. update.channel_post: {update.channel_post}")
-        logger.info(f"2. update.edited_channel_post: {update.edited_channel_post}")
-        
-        # معلومات عن update.message
-        if update.message:
-            logger.info(f"3. message.chat.id: {update.message.chat.id}")
-            logger.info(f"4. message.chat.type: {update.message.chat.type}")
-            logger.info(f"5. message.chat.title: {update.message.chat.title}")
-            logger.info(f"6. message.sender_chat: {update.message.sender_chat}")
-            if update.message.sender_chat:
-                logger.info(f"   - sender_chat.id: {update.message.sender_chat.id}")
-                logger.info(f"   - sender_chat.type: {update.message.sender_chat.type}")
-            logger.info(f"7. message.from_user: {update.message.from_user}")
-            if update.message.from_user:
-                logger.info(f"   - from_user.id: {update.message.from_user.id}")
-                logger.info(f"   - from_user.is_bot: {update.message.from_user.is_bot}")
-            logger.info(f"8. message.text: {update.message.text[:100] if update.message.text else 'لا يوجد نص'}")
-        else:
-            logger.info("3-8. update.message: غير موجود")
-        
-        # معلومات عن effective_chat و effective_user
-        if update.effective_chat:
-            logger.info(f"9. effective_chat.id: {update.effective_chat.id}")
-            logger.info(f"10. effective_chat.type: {update.effective_chat.type}")
-        if update.effective_user:
-            logger.info(f"11. effective_user.id: {update.effective_user.id}")
-            logger.info(f"12. effective_user.name: {update.effective_user.first_name}")
-            logger.info(f"13. effective_user.is_bot: {update.effective_user.is_bot}")
-        
-        logger.info("=" * 60)
-        
-        # ========== هنا تنتهي المعالجة - نخرج مباشرة ==========
-        # لا نقوم بأي شيء آخر حتى لا نحذف أي شيء
-        return
-        
-    except Exception as e:
-        logger.error(f"خطأ في المعالج التشخيصي: {e}")
-        
+        # 🛡️ الخط الدفاعي الأول: تجاهل منشورات القناة المباشرة تماماً
+        if update.channel_post:
+            return
+
+        # 🛡️ الخط الدفاعي الثاني: تجاهل الرسائل المحولة تلقائياً من القناة للمجموعة
+        if update.message and update.message.sender_chat:
+            logger.info(f"✅ استثناء: رسالة من قناة (sender_chat: {update.message.sender_chat.id})")
+            return
+
+        # التأكد من وجود رسالة نصية ومستخدم حقيقي
+        if not update.message or not update.message.text or not update.effective_user:
+            return
+
+        # استثناء البوت نفسه
+        bot_user = await context.bot.get_me()
+        if update.effective_user.id == bot_user.id:
+            return
+
+        message_text = update.message.text.strip()
+
+        # تجاهل الأوامر
+        if message_text.startswith('/'):
+            return
+
+        # تفعيل نظام الاشتراك في المجموعات فقط
+        if update.effective_chat.type in ["group", "supergroup"]:
+            user_id = update.effective_user.id
+
+            # استثناء المشرفين
+            if user_id in ADMIN_IDS:
+                pass  # السماح بالمرور
+            else:
+                # فحص الاشتراك للمستخدمين العاديين
+                if not await check_subscription(user_id, context):
+                    try:
+                        await update.message.delete()
+                        logger.info(f"🗑️ تم حذف رسالة المستخدم {user_id} (غير مشترك)")
+                        return
+                    except Exception as e:
+                        logger.error(f"خطأ في حذف الرسالة: {e}")
+                        return
 
         # ========== الردود التلقائية ==========
         norm_text = normalize_text(message_text)
