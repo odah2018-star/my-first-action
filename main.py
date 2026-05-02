@@ -632,6 +632,7 @@ async def publish_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== الأوامر الأساسية ====================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"📢 تم استلام أمر /start من {update.effective_user.id}")
     try:
         buttons = get_custom_buttons()
         keyboard = None
